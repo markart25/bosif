@@ -114,8 +114,6 @@ derived:
 - Several large sites (Instagram, TikTok, Twitter/X) aggressively block bots
   and may return false negatives or false positives. Treat presence checks as
   hints, not gospel.
-- No API keys are required. If you want richer results, you could plug in
-  HaveIBeenPwned, Shodan, or similar — patches welcome.
 - bosif only queries public information that anyone could look up manually.
   Use it lawfully and responsibly.
 
