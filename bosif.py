@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 from urllib.parse import quote
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 # ─── ANSI colours ──────────────────────────────────────────────────────────
 RESET = "\033[0m"
@@ -203,6 +203,9 @@ def filter_to_quick(sites):
                 out.append(s)
                 break
     return out
+
+
+def load_wmn_data():
     """Load WhatsMyName site definitions, fetching/caching from GitHub.
 
     Cache lives at ~/.cache/bosif/wmn-data.json and refreshes every 7 days.
