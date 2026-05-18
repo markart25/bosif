@@ -31,6 +31,14 @@ CYAN = "\033[36m"
 USER_AGENT = f"bosif/{__version__} (+https://github.com/markart25/bosif)"
 TIMEOUT = 8
 
+# WhatsMyName: community-maintained list of 600+ sites for username checks.
+# Cached locally so we don't hit GitHub every run.
+import os
+import time
+WMN_URL = "https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json"
+WMN_CACHE = os.path.expanduser("~/.cache/bosif/wmn-data.json")
+WMN_CACHE_MAX_AGE = 7 * 24 * 60 * 60  # 7 days
+
 # ─── Banner ────────────────────────────────────────────────────────────────
 BANNER = r"""
 ██████╗  ██████╗ ███████╗██╗███████╗
@@ -173,60 +181,115 @@ def derive(data):
 
 # ─── Checks ────────────────────────────────────────────────────────────────
 
-# Username platforms — (name, url-template, success-check)
-# success-check: 'status' means 200 = exists, or a string that must be ABSENT from body
-USERNAME_SITES = [
-    ("GitHub",      "https://github.com/{u}",                     "status"),
-    ("GitLab",      "https://gitlab.com/{u}",                     "status"),
-    ("Reddit",      "https://www.reddit.com/user/{u}",            "status"),
-    ("Twitter/X",   "https://twitter.com/{u}",                    "status"),
-    ("Instagram",   "https://www.instagram.com/{u}/",             "status"),
-    ("TikTok",      "https://www.tiktok.com/@{u}",                "status"),
-    ("YouTube",     "https://www.youtube.com/@{u}",               "status"),
-    ("Twitch",      "https://www.twitch.tv/{u}",                  "status"),
-    ("Steam",       "https://steamcommunity.com/id/{u}",          "status"),
-    ("Pinterest",   "https://www.pinterest.com/{u}/",             "status"),
-    ("Medium",      "https://medium.com/@{u}",                    "status"),
-    ("Dev.to",      "https://dev.to/{u}",                         "status"),
-    ("HackerNews",  "https://news.ycombinator.com/user?id={u}",   "No such user."),
-    ("Keybase",     "https://keybase.io/{u}",                     "status"),
-    ("AUR",         "https://aur.archlinux.org/account/{u}",      "status"),
-]
+def load_wmn_data():
+    """Load WhatsMyName site definitions, fetching/caching from GitHub.
+
+    Cache lives at ~/.cache/bosif/wmn-data.json and refreshes every 7 days.
+    """
+    use_cache = False
+    if os.path.exists(WMN_CACHE):
+        age = time.time() - os.path.getmtime(WMN_CACHE)
+        if age < WMN_CACHE_MAX_AGE:
+            use_cache = True
+
+    if not use_cache:
+        print(f"  {DIM}fetching WhatsMyName site list...{RESET}")
+        status, body = http_get(WMN_URL, timeout=15)
+        if status == 200 and body:
+            os.makedirs(os.path.dirname(WMN_CACHE), exist_ok=True)
+            with open(WMN_CACHE, "w") as f:
+                f.write(body)
+        elif not os.path.exists(WMN_CACHE):
+            warn("could not fetch WhatsMyName data and no cache exists")
+            return None
+
+    try:
+        with open(WMN_CACHE) as f:
+            return json.load(f)
+    except Exception as e:
+        warn(f"could not read WMN cache: {e}")
+        return None
 
 
-def check_username_site(name, url_tpl, mode, username):
-    url = url_tpl.format(u=quote(username, safe=""))
-    if mode == "status":
-        s = http_head_status(url)
-        found = s == 200
-        return (name, url, found, s)
-    else:
-        s, body = http_get(url)
-        if s == 200 and body and mode not in body:
-            return (name, url, True, s)
-        return (name, url, False, s)
+def check_wmn_site(site, username):
+    """Run one WhatsMyName site check.
+
+    A hit requires:
+      - HTTP status matches site['e_code']  (expected/exists code)
+      - site['e_string'] is in the body     (expected substring)
+      - site['m_string'] is NOT in the body (missing substring absent)
+    """
+    name = site.get("name", "?")
+    cat = site.get("cat", "")
+    url = site["uri_check"].replace("{account}", quote(username, safe=""))
+    pretty = site.get("uri_pretty", site["uri_check"]).replace(
+        "{account}", quote(username, safe=""))
+
+    # Strip disallowed characters if the site specifies them
+    bad = site.get("strip_bad_char", "")
+    if bad:
+        clean_u = "".join(c for c in username if c not in bad)
+        if clean_u != username:
+            url = site["uri_check"].replace("{account}", quote(clean_u, safe=""))
+            pretty = site.get("uri_pretty", site["uri_check"]).replace(
+                "{account}", quote(clean_u, safe=""))
+
+    headers = site.get("headers", {})
+    status, body = http_get(url, headers=headers)
+
+    e_code = site.get("e_code")
+    e_string = site.get("e_string", "")
+    m_string = site.get("m_string", "")
+
+    found = False
+    if status == e_code and body is not None:
+        if e_string and e_string in body:
+            if not m_string or m_string not in body:
+                found = True
+
+    return (name, cat, pretty, found, status)
 
 
-def run_username_checks(username):
+def run_username_checks(username, max_workers=20, category_filter=None):
     section(f"Username — {username}")
+    data = load_wmn_data()
+    if not data:
+        warn("falling back: no site list available")
+        return
+
+    sites = data.get("sites", [])
+    if category_filter:
+        sites = [s for s in sites if s.get("cat") in category_filter]
+
+    print(f"  {DIM}checking {len(sites)} sites...{RESET}\n")
+
     results = []
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        futs = {ex.submit(check_username_site, n, u, m, username): n
-                for n, u, m in USERNAME_SITES}
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(check_wmn_site, s, username): s for s in sites}
         for f in as_completed(futs):
             try:
                 results.append(f.result())
             except Exception as e:
-                results.append((futs[f], "", False, str(e)))
-    results.sort(key=lambda r: r[0].lower())
-    found_count = 0
-    for name, url, found, status in results:
-        if found:
-            ok(f"{name:<12}", url)
-            found_count += 1
-        else:
-            miss(f"{name:<12}", f"HTTP {status}" if status else "no response")
-    print(f"\n  {DIM}{found_count}/{len(results)} platforms returned a hit{RESET}")
+                s = futs[f]
+                results.append((s.get("name", "?"), s.get("cat", ""), "", False, str(e)))
+
+    # Show only hits to keep output sane (15+ misses across 600 sites is noise).
+    hits = [r for r in results if r[3]]
+    hits.sort(key=lambda r: (r[1] or "", r[0].lower()))
+
+    if hits:
+        current_cat = None
+        for name, cat, url, found, status in hits:
+            if cat != current_cat:
+                print(f"\n  {MAGENTA}[{cat or 'uncategorised'}]{RESET}")
+                current_cat = cat
+            ok(f"{name:<22}", url)
+    else:
+        miss("no hits across any platform")
+
+    errs = sum(1 for r in results if not r[3] and not isinstance(r[4], int))
+    print(f"\n  {DIM}{len(hits)} hits / {len(results)} sites checked"
+          f"{f' ({errs} errored)' if errs else ''}{RESET}")
 
     # GitHub deep-dive
     gh_url = f"https://api.github.com/users/{quote(username)}"

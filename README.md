@@ -21,10 +21,13 @@ bosif takes the inputs you give it, derives anything it can (e.g. an email
 gives it a username and a domain; a domain gives it an IP), then runs a set of
 checks against public, no-auth sources:
 
-- **Name** → suggests likely username variants
-- **Username** → presence checks across 15 platforms (GitHub, GitLab, Reddit,
-  Twitter/X, Instagram, TikTok, YouTube, Twitch, Steam, Pinterest, Medium,
-  Dev.to, Hacker News, Keybase, AUR) plus a deep-dive on the GitHub API
+- **Name** → derives likely username variants (`johnsmith`, `john.smith`,
+  `john_smith`, `jsmith`, `smithjohn`) and sweeps them against WhatsMyName.
+  Prompts you to pick which variants to check and whether to run a quick
+  ~30-site subset or the full 600-site sweep.
+- **Username** → presence checks against **600+ platforms** using the
+  community-maintained [WhatsMyName](https://github.com/WebBreacher/WhatsMyName)
+  database, plus a deep-dive on the GitHub API
 - **Email** → Gravatar profile lookup (linked accounts, bio, location), MX
   records and mail provider detection
 - **Domain** → A / AAAA / MX / NS / TXT records via Cloudflare DoH
@@ -32,7 +35,8 @@ checks against public, no-auth sources:
 - **Phone** → country, carrier, region, line type, timezone (offline, via
   Google's `libphonenumber`)
 
-Username checks run in parallel so the slow part finishes quickly.
+The WhatsMyName JSON is cached at `~/.cache/bosif/wmn-data.json` and refreshed
+weekly. Username checks run in parallel so the slow part finishes quickly.
 
 ## Install
 
@@ -82,30 +86,37 @@ it'll prompt you for each value, then run the checks.
 ### Example
 
 ```
-> 23
+> 13
 
-  Username / handle: torvalds
+  Full name (e.g. John Smith): Linus Torvalds
   Email address: linus@kernel.org
 
 collected:
-  • username    torvalds
+  • name        Linus Torvalds
   • email       linus@kernel.org
 
 derived:
-  • • derived domain 'kernel.org' from email
-  • • resolved domain to IP '139.178.84.217'
+  • derived domain 'kernel.org' from email
+  • resolved domain to IP '139.178.84.217'
 
-── Username — torvalds ────────────────────────────────
-  ✓ AUR          https://aur.archlinux.org/account/torvalds
-  ✓ GitHub       https://github.com/torvalds
-  ✗ Instagram    (HTTP 404)
-  ...
+── Name — Linus Torvalds ──────────────────────────────
+  derived these usernames from Linus Torvalds:
 
-── GitHub profile — torvalds ──────────────────────────
-  • name           Linus Torvalds
-  • company        Linux Foundation
-  • public_repos   7
-  • followers      234567
+    1  linustorvalds
+    2  linus.torvalds
+    3  linus_torvalds
+    4  ltorvalds
+    5  torvaldslinus
+
+  check which? [a]ll quick / [numbers] / [t]horough all / [s]kip
+  > 1
+
+  running quick sweep on 1 variant(s)
+
+── Variant 'linustorvalds' (from Linus Torvalds) ──────
+  [coding]
+  ✓ GitHub                 https://github.com/linustorvalds
+  ✓ GitLab                 https://gitlab.com/linustorvalds
   ...
 ```
 
@@ -124,6 +135,15 @@ derived:
 - Plugin system for adding custom checks
 - Optional HIBP / Shodan / VirusTotal integrations behind API keys
 - Maybe an AUR package later
+
+## Credits
+
+Username enumeration is powered by
+[WhatsMyName](https://github.com/WebBreacher/WhatsMyName) by `@WebBreacher`
+and contributors, licensed CC BY-SA 4.0. bosif fetches and caches their
+`wmn-data.json` to do its checks. Massive thanks to that project — please
+contribute new site detections [upstream](https://github.com/WebBreacher/WhatsMyName)
+rather than to bosif.
 
 ## License
 
