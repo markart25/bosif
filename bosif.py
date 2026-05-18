@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 from urllib.parse import quote
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # ─── ANSI colours ──────────────────────────────────────────────────────────
 RESET = "\033[0m"
@@ -181,7 +181,28 @@ def derive(data):
 
 # ─── Checks ────────────────────────────────────────────────────────────────
 
-def load_wmn_data():
+# Curated high-signal sites for the "quick" mode when sweeping name variants.
+# These are matched by name against the WMN list (case-insensitive substring).
+QUICK_SITES = [
+    "GitHub", "GitLab", "Reddit", "Twitter", "Instagram", "TikTok",
+    "YouTube", "Twitch", "Steam", "Pinterest", "Medium", "Dev.to",
+    "HackerNews", "Hacker News", "Keybase", "AUR", "Stack Overflow",
+    "LinkedIn", "Facebook", "Spotify", "SoundCloud", "Last.fm",
+    "DeviantArt", "Behance", "Dribbble", "Vimeo", "Telegram",
+    "Discord", "Mastodon", "Bluesky",
+]
+
+
+def filter_to_quick(sites):
+    """Return only WMN sites whose name matches our curated list."""
+    out = []
+    for s in sites:
+        name = s.get("name", "").lower()
+        for q in QUICK_SITES:
+            if q.lower() in name:
+                out.append(s)
+                break
+    return out
     """Load WhatsMyName site definitions, fetching/caching from GitHub.
 
     Cache lives at ~/.cache/bosif/wmn-data.json and refreshes every 7 days.
@@ -200,7 +221,11 @@ def load_wmn_data():
             with open(WMN_CACHE, "w") as f:
                 f.write(body)
         elif not os.path.exists(WMN_CACHE):
-            warn("could not fetch WhatsMyName data and no cache exists")
+            warn(f"could not fetch WhatsMyName data: {body or f'HTTP {status}'}")
+            warn("if you're on a network that intercepts HTTPS (e.g. school wifi),")
+            warn("download the file manually and place it at:")
+            warn(f"  {WMN_CACHE}")
+            warn("from: " + WMN_URL)
             return None
 
     try:
@@ -250,16 +275,17 @@ def check_wmn_site(site, username):
     return (name, cat, pretty, found, status)
 
 
-def run_username_checks(username, max_workers=20, category_filter=None):
-    section(f"Username — {username}")
+def run_username_checks(username, max_workers=20, quick=False, label=None):
+    header = label or f"Username — {username}"
+    section(header)
     data = load_wmn_data()
     if not data:
         warn("falling back: no site list available")
         return
 
     sites = data.get("sites", [])
-    if category_filter:
-        sites = [s for s in sites if s.get("cat") in category_filter]
+    if quick:
+        sites = filter_to_quick(sites)
 
     print(f"  {DIM}checking {len(sites)} sites...{RESET}\n")
 
@@ -454,16 +480,51 @@ def check_name(name):
     parts = name.strip().split()
     if len(parts) < 2:
         warn("name only has one part — try entering first and last name")
-    # Generate likely username variants
+        return []
+
     first = parts[0].lower()
-    last = parts[-1].lower() if len(parts) > 1 else ""
-    variants = []
-    if last:
-        variants = [f"{first}{last}", f"{first}.{last}", f"{first}_{last}",
-                    f"{first[0]}{last}", f"{last}{first}"]
-    else:
-        variants = [first]
-    info("likely usernames to try", ", ".join(variants))
+    last = parts[-1].lower()
+    variants = [
+        f"{first}{last}",
+        f"{first}.{last}",
+        f"{first}_{last}",
+        f"{first[0]}{last}",
+        f"{last}{first}",
+    ]
+    # de-dupe while preserving order
+    seen = set()
+    variants = [v for v in variants if not (v in seen or seen.add(v))]
+
+    print(f"  derived these usernames from {BOLD}{name}{RESET}:\n")
+    for i, v in enumerate(variants, 1):
+        print(f"    {YELLOW}{i}{RESET}  {v}")
+    print()
+    print(f"  check which? {DIM}[a]ll quick / [numbers] / [t]horough all / [s]kip{RESET}")
+    print(f"  {DIM}default: 'a' — quick subset (~25 sites) across all variants{RESET}")
+    raw = input(f"  {BOLD}> {RESET}").strip().lower()
+
+    if raw == "s" or raw == "skip":
+        info("skipping", "name-derived username sweep")
+        return variants
+
+    thorough = raw in ("t", "thorough")
+    if raw and raw not in ("a", "all", "t", "thorough"):
+        # parse numbers — pick specific variants
+        digits = re.findall(r"\d", raw)
+        chosen = []
+        for d in digits:
+            idx = int(d) - 1
+            if 0 <= idx < len(variants) and variants[idx] not in chosen:
+                chosen.append(variants[idx])
+        if chosen:
+            variants = chosen
+
+    mode_label = "thorough" if thorough else "quick"
+    print(f"\n  {DIM}running {mode_label} sweep on {len(variants)} variant(s){RESET}")
+
+    for v in variants:
+        run_username_checks(v, quick=not thorough,
+                            label=f"Variant '{v}' (from {name})")
     return variants
 
 
